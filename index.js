@@ -1,7 +1,7 @@
 const { execSync } = require('child_process');
 
 // ==========================================
-// 📦 1. AUTO-INSTALLER (Pterodactyl Ready)
+// 📦 1. AUTO-INSTALLER (Disesuaikan untuk Node v12)
 // ==========================================
 try {
     require.resolve('telegram');
@@ -9,10 +9,11 @@ try {
 } catch (e) {
     console.log('📦 Modul tidak ditemukan, menginstal sekarang...');
     try {
-        execSync('npm install telegram input', { stdio: 'inherit' });
-        console.log('✅ Instalasi selesai! Memulai bot...');
+        // Menggunakan --no-engines untuk memaksa install di Node lama
+        execSync('npm install telegram input --no-engines', { stdio: 'inherit' });
+        console.log('✅ Instalasi selesai!');
     } catch (err) {
-        console.error('❌ Gagal menginstal modul otomatis:', err.message);
+        console.error('❌ Gagal install:', err.message);
     }
 }
 
@@ -22,24 +23,18 @@ const { NewMessage } = require('telegram/events');
 const input = require('input');
 
 // ==========================================
-// 👑 2. KONFIGURASI (PENTING)
+// 👑 2. KONFIGURASI
 // ==========================================
-// Ambil API ID & Hash dari https://my.telegram.org
 const OWNER_API_ID = 29798494; 
 const OWNER_API_HASH = '53273c1de3e68a9ecdb90de2dcf46f6c';
 
-/**
- * 💡 TIPS PTERODACTYL:
- * Karena panel tidak mendukung input terminal yang lama, 
- * jalankan script ini sekali di PC lokal untuk mendapatkan StringSession.
- * Masukkan kode panjang tersebut ke OWNER_SESSION_STRING di bawah ini.
- */
+// Masukkan Session String di sini agar tidak perlu OTP di Panel
 const OWNER_SESSION_STRING = ""; 
 
 let ownerClient = null;
 let relayBots = [];
 let isAutoBcRunning = false;
-let autoBcDelay = 5; // Menit
+let autoBcDelay = 5; 
 let autoBcMessages = [];
 let broadcastInterval = null;
 let quoteMessage = null;
@@ -57,21 +52,17 @@ async function loginOwner() {
 
   try {
     await ownerClient.start({
-      phoneNumber: async () => await input.text('📞 Masukkan Nomor HP (+62...): '),
-      password: async () => await input.text('🔐 Masukkan Password 2FA: '),
-      phoneCode: async () => await input.text('📲 Masukkan Kode OTP: '),
+      phoneNumber: async () => await input.text('📞 Nomor HP: '),
+      password: async () => await input.text('🔐 Password 2FA: '),
+      phoneCode: async () => await input.text('📲 Kode OTP: '),
       onError: (err) => console.log('❌ Login Error:', err.message),
     });
 
     const me = await ownerClient.getMe();
-    console.log(`✅ Berhasil Login sebagai: ${me.firstName}`);
+    console.log('✅ Berhasil Login sebagai: ' + me.firstName);
     
-    // Tampilkan session string agar user bisa menyimpannya untuk Pterodactyl
     if (!OWNER_SESSION_STRING) {
-        console.log('\n--- 🎫 SESSION STRING ANDA ---');
-        console.log(ownerClient.session.save());
-        console.log('------------------------------\n');
-        console.log('💡 SIMPAN kode di atas ke variabel OWNER_SESSION_STRING agar tidak perlu OTP lagi.\n');
+        console.log('\n🎫 SESSION STRING ANDA:\n' + ownerClient.session.save() + '\n');
     }
 
     setupOwnerHandler(ownerClient);
@@ -81,46 +72,30 @@ async function loginOwner() {
 }
 
 // ==========================================
-// 🎯 4. HANDLER PERINTAH OWNER
+// 🎯 4. HANDLER PERINTAH (Syntax disesuaikan untuk Node v12)
 // ==========================================
 function setupOwnerHandler(client) {
   client.addEventHandler(async (event) => {
     const msg = event.message;
-    if (!msg.out || !msg.text) return; // Hanya baca pesan keluar dari owner
+    if (!msg.out || !msg.text) return;
 
     const text = msg.text.trim();
     const args = text.split(/\s+/);
 
-    // Command Help
     if (text === '.help') {
-      const helpText = `
-👑 **COMMAND BROADCAST**
-.autobc on       - Mulai Broadcast
-.autobc off      - Berhenti
-.autobc status   - Cek status
-.autobc delay X  - Set delay (menit)
-.addkutip        - Simpan pesan (reply ke pesan)
-.autobc remove   - Reset daftar pesan
-      `;
-      await msg.reply({ message: helpText });
+      await msg.reply({ message: "👑 **COMMANDS**\n.autobc on/off/status\n.addkutip (reply)\n.autobc remove" });
       return;
     }
 
-    // Add Kutipan (Media/Text)
     if (args[0] === '.addkutip' && msg.replyTo) {
-      try {
-        const reply = await client.getMessages(msg.peerId, { ids: msg.replyTo.replyToMsgId });
-        if (reply[0]) {
-          quoteMessage = reply[0];
-          await msg.reply({ message: '✅ Pesan berhasil disimpan sebagai kutipan broadcast.' });
-        }
-      } catch (e) {
-        await msg.reply({ message: '❌ Gagal mengambil pesan: ' + e.message });
+      const reply = await client.getMessages(msg.peerId, { ids: msg.replyTo.replyToMsgId });
+      if (reply && reply[0]) {
+        quoteMessage = reply[0];
+        await msg.reply({ message: '✅ Kutipan disimpan.' });
       }
       return;
     }
 
-    // Handle AutoBC commands
     if (text.startsWith('.autobc')) {
       await handleAutoBcCommand(msg, client);
     }
@@ -132,94 +107,71 @@ function setupOwnerHandler(client) {
 // ==========================================
 async function performBroadcastCycle() {
   if (!isAutoBcRunning) return;
-  console.log(`📢 Menjalankan Broadcast: ${new Date().toLocaleTimeString()}`);
+  console.log('📢 Menjalankan Broadcast...');
 
-  const activeClients = [ownerClient, ...relayBots];
+  const activeClients = [ownerClient].concat(relayBots);
   
-  for (const client of activeClients) {
+  for (let i = 0; i < activeClients.length; i++) {
+    const client = activeClients[i];
     try {
       const dialogs = await client.getDialogs({ limit: 50 });
-      for (const dialog of dialogs) {
+      for (let j = 0; j < dialogs.length; j++) {
+        const dialog = dialogs[j];
         if (!isAutoBcRunning) break;
         if (!(dialog.isGroup || dialog.isChannel)) continue;
 
         try {
           if (quoteMessage) {
-            // Forward kutipan
             await client.forwardMessages(dialog.id, {
               messages: [quoteMessage.id],
               fromPeer: quoteMessage.peerId,
             });
           } else if (autoBcMessages.length > 0) {
-            // Kirim teks random
             const randomMsg = autoBcMessages[Math.floor(Math.random() * autoBcMessages.length)];
             await client.sendMessage(dialog.id, { message: randomMsg });
           }
-          // Jeda antar grup (menghindari limit)
-          await new Promise(r => setTimeout(r, 3000)); 
+          await new Promise(function(r) { setTimeout(r, 3000); }); 
         } catch (err) {}
       }
-    } catch (err) {
-      console.log('⚠️ Error pada salah satu akun relay:', err.message);
-    }
+    } catch (err) {}
   }
 }
 
 async function handleAutoBcCommand(message, client) {
   const args = message.text.split(/\s+/);
-  const subCmd = args[1]?.toLowerCase();
+  const subCmd = args[1] ? args[1].toLowerCase() : null;
 
-  // Jika reply tanpa subcmd, tambahkan ke list teks
   if (!subCmd && message.replyTo) {
     const reply = await client.getMessages(message.peerId, { ids: message.replyTo.replyToMsgId });
-    if (reply[0]?.message) {
+    if (reply && reply[0] && reply[0].message) {
       autoBcMessages.push(reply[0].message);
-      await message.reply({ message: `✅ Pesan teks ditambahkan. Total: ${autoBcMessages.length}` });
+      await message.reply({ message: '✅ Pesan teks ditambahkan.' });
     }
     return;
   }
 
-  switch (subCmd) {
-    case 'on':
-      if (isAutoBcRunning) return await message.reply({ message: '⚠️ Broadcast sudah berjalan.' });
-      isAutoBcRunning = true;
-      if (broadcastInterval) clearInterval(broadcastInterval);
-      broadcastInterval = setInterval(performBroadcastCycle, autoBcDelay * 60 * 1000);
-      performBroadcastCycle();
-      await message.reply({ message: `🟢 Broadcast DIAKTIFKAN. Delay: ${autoBcDelay} mnt.` });
-      break;
-    case 'off':
-      isAutoBcRunning = false;
-      clearInterval(broadcastInterval);
-      await message.reply({ message: '🔴 Broadcast DINONAKTIFKAN.' });
-      break;
-    case 'status':
-      await message.reply({ message: `📊 **STATUS**\nAktif: ${isAutoBcRunning}\nRelay: ${relayBots.length + 1}\nDelay: ${autoBcDelay} mnt\nDaftar Pesan: ${autoBcMessages.length}\nKutipan: ${quoteMessage ? 'Sedia' : 'Kosong'}` });
-      break;
-    case 'delay':
-      const newDelay = parseInt(args[2]);
-      if (newDelay > 0) {
-        autoBcDelay = newDelay;
-        await message.reply({ message: `⏱️ Delay diatur ke ${newDelay} menit.` });
-      }
-      break;
-    case 'remove':
-      autoBcMessages = [];
-      quoteMessage = null;
-      await message.reply({ message: '🗑️ Semua data broadcast dibersihkan.' });
-      break;
+  if (subCmd === 'on') {
+    isAutoBcRunning = true;
+    if (broadcastInterval) clearInterval(broadcastInterval);
+    broadcastInterval = setInterval(performBroadcastCycle, autoBcDelay * 60 * 1000);
+    performBroadcastCycle();
+    await message.reply({ message: '🟢 Broadcast Aktif.' });
+  } else if (subCmd === 'off') {
+    isAutoBcRunning = false;
+    clearInterval(broadcastInterval);
+    await message.reply({ message: '🔴 Broadcast Mati.' });
+  } else if (subCmd === 'status') {
+    await message.reply({ message: '📊 Status: ' + (isAutoBcRunning ? 'Running' : 'Stopped') + '\nDelay: ' + autoBcDelay + 'm' });
+  } else if (subCmd === 'remove') {
+    autoBcMessages = [];
+    quoteMessage = null;
+    await message.reply({ message: '🗑️ Data dihapus.' });
   }
 }
 
-// ==========================================
-// 🏁 6. MAIN EXECUTION
-// ==========================================
 async function main() {
   await loginOwner();
-  console.log('🚀 System Online. Menunggu command dari Telegram...');
-  
-  // Agar proses tidak mati di Pterodactyl
-  setInterval(() => {}, 1000 * 60 * 60);
+  setInterval(function() { }, 1000 * 60);
 }
 
 main().catch(console.error);
