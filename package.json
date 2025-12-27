@@ -1,0 +1,13 @@
+{
+  "name": "auto-broadcast-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for Pterodactyl with Auto-Installer",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "input": "^1.0.1",
+    "telegram": "^2.26.21"
+  }
+}
