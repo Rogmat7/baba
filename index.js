@@ -19,10 +19,11 @@ try {
     }
 }
 
-const { TelegramClient, Api } = require('telegram');
+const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { NewMessage } = require('telegram/events');
 const input = require('input');
+const { Api } = require('telegram/tl/api');
 
 // ==========================================
 // 📁 2. KONFIGURASI & PERSISTENSI
@@ -38,7 +39,8 @@ let config = {
     autoBcDelay: 5,
     autoBcMessages: [],
     autoBcRunning: false,
-    relayBots: []
+    relayBots: [],
+    debugMode: false
 };
 
 if (fs.existsSync(CONFIG_FILE)) {
@@ -85,6 +87,7 @@ function saveSession(sessionString) {
 let ownerClient = null;
 let quoteMessage = null;
 let broadcastInterval = null;
+let isConnected = false;
 
 // ==========================================
 // 🔐 3. FUNGSI LOGIN dengan Auto-Save Session
@@ -95,6 +98,8 @@ async function loginOwner() {
     
     ownerClient = new TelegramClient(stringSession, OWNER_API_ID, OWNER_API_HASH, {
         connectionRetries: 5,
+        useWSS: false, // Nonaktifkan WSS untuk koneksi lebih stabil
+        timeout: 30000
     });
 
     try {
@@ -121,6 +126,7 @@ async function loginOwner() {
             OWNER_SESSION_STRING = sessionString;
         }
 
+        isConnected = true;
         setupOwnerHandler(ownerClient);
         
         // Restart broadcast jika sebelumnya aktif
@@ -134,9 +140,11 @@ async function loginOwner() {
         console.error('❌ GAGAL LOGIN:', err.message);
         
         // Jika session tidak valid, hapus dan coba login manual
-        if (OWNER_SESSION_STRING && err.message.includes('SESSION_REVOKED')) {
+        if (OWNER_SESSION_STRING && (err.message.includes('SESSION_REVOKED') || err.message.includes('AUTH_KEY'))) {
             console.log('⚠️ Session tidak valid, menghapus dan mencoba login ulang...');
-            fs.unlinkSync(SESSION_FILE);
+            if (fs.existsSync(SESSION_FILE)) {
+                fs.unlinkSync(SESSION_FILE);
+            }
             OWNER_SESSION_STRING = "";
             return await loginOwner();
         }
@@ -172,9 +180,11 @@ function setupOwnerHandler(client) {
 .listtext - Lihat daftar pesan teks
 .removetext <nomor> - Hapus pesan tertentu
 
-**Info:**
+**Debug & Info:**
 .me - Info akun
 .ping - Cek koneksi
+.debug on/off - Mode debug
+.listgroups - Lihat daftar grup
             `;
             await msg.reply({ message: helpText });
             return;
@@ -198,8 +208,67 @@ function setupOwnerHandler(client) {
             const latency = Date.now() - start;
             await client.editMessage(msg.chatId, { 
                 message: msg.id + 1, 
-                text: `🏓 Pong!\n⏱️ Latency: ${latency}ms`
+                text: `🏓 Pong!\n⏱️ Latency: ${latency}ms\nStatus: ${isConnected ? '🟢 Connected' : '🔴 Disconnected'}`
             });
+            return;
+        }
+
+        if (args[0] === '.debug') {
+            if (args[1] === 'on') {
+                config.debugMode = true;
+                saveConfig();
+                await msg.reply({ message: '🔧 Debug mode: ON' });
+            } else if (args[1] === 'off') {
+                config.debugMode = false;
+                saveConfig();
+                await msg.reply({ message: '🔧 Debug mode: OFF' });
+            } else {
+                await msg.reply({ message: `Debug mode: ${config.debugMode ? 'ON' : 'OFF'}` });
+            }
+            return;
+        }
+
+        if (args[0] === '.listgroups' || args[0] === '/listgroups') {
+            try {
+                await msg.reply({ message: '⏳ Mengambil daftar grup...' });
+                
+                const dialogs = await client.getDialogs({ limit: 100 });
+                const groups = [];
+                
+                dialogs.forEach(dialog => {
+                    if (dialog.isGroup || (dialog.entity && 
+                        (dialog.entity.className === 'Chat' || 
+                         dialog.entity.className === 'Channel' && dialog.entity.megagroup))) {
+                        groups.push({
+                            title: dialog.title || dialog.name || 'Unknown',
+                            id: dialog.id,
+                            type: dialog.entity.className,
+                            participants: dialog.entity.participantsCount || 0
+                        });
+                    }
+                });
+                
+                let response = `📋 **DAFTAR GRUP**\n\n`;
+                if (groups.length === 0) {
+                    response += '❌ Tidak ada grup ditemukan\n';
+                    response += 'Pastikan Anda sudah join beberapa grup!';
+                } else {
+                    groups.forEach((group, index) => {
+                        response += `${index + 1}. ${group.title}\n`;
+                        response += `   👥 ${group.participants} members | Type: ${group.type}\n\n`;
+                    });
+                    response += `\nTotal: ${groups.length} grup ditemukan`;
+                }
+                
+                await client.editMessage(msg.chatId, {
+                    message: msg.id + 1,
+                    text: response
+                });
+                
+            } catch (err) {
+                console.error(err);
+                await msg.reply({ message: '❌ Error: ' + err.message });
+            }
             return;
         }
 
@@ -265,7 +334,7 @@ function setupOwnerHandler(client) {
 // 🚀 5. LOGIKA BROADCAST (Hanya ke Grup)
 // ==========================================
 async function performBroadcastCycle() {
-    if (!config.autoBcRunning || !ownerClient || !ownerClient.connected) {
+    if (!config.autoBcRunning || !ownerClient || !isConnected) {
         console.log('⚠️ Broadcast tidak aktif atau client tidak terhubung');
         return;
     }
@@ -274,16 +343,35 @@ async function performBroadcastCycle() {
     
     try {
         // Ambil semua dialog
-        const dialogs = await ownerClient.getDialogs({});
+        const dialogs = await ownerClient.getDialogs({ limit: 200 });
         
-        // Filter hanya grup (tidak termasuk channel)
+        if (config.debugMode) {
+            console.log('🔍 Total dialog:', dialogs.length);
+            dialogs.forEach((dialog, idx) => {
+                console.log(`${idx + 1}. ${dialog.title || dialog.name} - ${dialog.entity ? dialog.entity.className : 'Unknown'} - ${dialog.isGroup ? 'Group' : 'Not Group'}`);
+            });
+        }
+        
+        // Filter hanya grup (termasuk megagroup/supergroup)
         const groups = dialogs.filter(dialog => {
-            // Cek apakah ini grup super (mega group/group) dan bukan channel
-            return (dialog.isGroup || dialog.entity && dialog.entity.className === 'Chat') && 
-                   !dialog.isChannel;
+            // Cek berbagai jenis grup
+            const isGroup = dialog.isGroup;
+            const isMegagroup = dialog.entity && dialog.entity.className === 'Channel' && dialog.entity.megagroup;
+            const isChat = dialog.entity && dialog.entity.className === 'Chat';
+            
+            // Exclude channel pribadi/broadcast
+            const isChannel = dialog.isChannel && !dialog.entity.megagroup;
+            
+            // Hanya ambil yang grup atau megagroup
+            return (isGroup || isMegagroup || isChat) && !isChannel;
         });
         
         console.log(`📍 Ditemukan ${groups.length} grup`);
+        
+        if (groups.length === 0) {
+            console.log('⚠️ Tidak ada grup ditemukan. Gunakan .listgroups untuk debug');
+            return;
+        }
         
         // Kirim ke setiap grup
         for (let i = 0; i < groups.length; i++) {
@@ -295,7 +383,8 @@ async function performBroadcastCycle() {
             }
             
             try {
-                console.log(`📤 Mengirim ke: ${group.title || group.name || 'Unknown'}`);
+                const groupName = group.title || group.name || 'Unknown Group';
+                console.log(`📤 [${i + 1}/${groups.length}] Mengirim ke: ${groupName}`);
                 
                 if (quoteMessage) {
                     // Kirim sebagai forward
@@ -321,10 +410,18 @@ async function performBroadcastCycle() {
                 }
                 
                 // Delay antara pengiriman
-                await sleep(3000);
+                await sleep(5000); // 5 detik delay
                 
             } catch (err) {
-                console.log(`  ❌ Error: ${err.message}`);
+                console.log(`  ❌ Error pada grup ${group.title || 'Unknown'}: ${err.message}`);
+                
+                // Skip grup jika error tertentu
+                if (err.message.includes('CHAT_WRITE_FORBIDDEN') || 
+                    err.message.includes('USER_BANNED') ||
+                    err.message.includes('CHAT_ADMIN_REQUIRED')) {
+                    console.log('  ⏭️ Skip grup ini (tidak bisa kirim)');
+                }
+                
                 continue;
             }
         }
@@ -333,6 +430,7 @@ async function performBroadcastCycle() {
         
     } catch (err) {
         console.error('❌ Error dalam broadcast cycle:', err.message);
+        isConnected = false; // Tandai sebagai disconnect
     }
 }
 
@@ -354,7 +452,7 @@ function startAutoBroadcast() {
     // Jalankan segera setelah diaktifkan
     setTimeout(() => {
         performBroadcastCycle();
-    }, 5000);
+    }, 3000);
     
     console.log(`⏰ Broadcast dijadwalkan setiap ${config.autoBcDelay} menit`);
 }
@@ -382,7 +480,7 @@ async function handleAutoBcCommand(message, client) {
             saveConfig();
             startAutoBroadcast();
             await message.reply({ 
-                message: `🟢 Broadcast Aktif.\nDelay: ${config.autoBcDelay} menit\nPesan: ${config.autoBcMessages.length} teks`
+                message: `🟢 Broadcast Aktif.\nDelay: ${config.autoBcDelay} menit\nPesan: ${config.autoBcMessages.length} teks\nStatus: Akan mulai dalam 3 detik`
             });
             break;
             
@@ -404,7 +502,9 @@ Status: ${config.autoBcRunning ? '🟢 AKTIF' : '🔴 MATI'}
 Delay: ${config.autoBcDelay} menit
 Pesan teks: ${config.autoBcMessages.length}
 Kutipan: ${quoteMessage ? '✅ Ada' : '❌ Tidak ada'}
+Koneksi: ${isConnected ? '🟢 Connected' : '🔴 Disconnected'}
 Mode: Hanya Grup
+Debug: ${config.debugMode ? 'ON' : 'OFF'}
             `;
             await message.reply({ message: statusText });
             break;
@@ -456,12 +556,16 @@ let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
 async function keepAlive() {
-    if (!ownerClient || !ownerClient.connected) {
+    if (!ownerClient || !isConnected) {
         console.log('⚠️ Client terputus, mencoba reconnect...');
         reconnectAttempts++;
         
         if (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS) {
             try {
+                // Coba reconnect
+                if (ownerClient) {
+                    await ownerClient.disconnect();
+                }
                 await loginOwner();
                 reconnectAttempts = 0;
                 console.log('✅ Reconnect berhasil');
@@ -472,12 +576,14 @@ async function keepAlive() {
             console.error('❌ Max reconnect attempts reached');
         }
     } else {
-        // Lakukan ping periodik untuk menjaga koneksi
+        // Lakukan ping sederhana untuk menjaga koneksi
         try {
-            await ownerClient.invoke(new Api.ping({ pingId: BigInt(Math.floor(Math.random() * 1000000)) }));
-            console.log('🟢 Connection alive');
+            // Gunakan getMe sebagai ping alternative
+            await ownerClient.getMe();
+            console.log('🟢 Connection alive - ' + new Date().toLocaleTimeString());
         } catch (err) {
             console.log('⚠️ Ping failed:', err.message);
+            isConnected = false;
         }
     }
 }
@@ -492,32 +598,42 @@ async function main() {
     // Login owner
     const loginSuccess = await loginOwner();
     if (!loginSuccess) {
-        console.error('❌ Tidak bisa login, keluar...');
-        process.exit(1);
+        console.error('❌ Tidak bisa login, coba lagi dalam 10 detik...');
+        setTimeout(main, 10000);
+        return;
     }
     
-    // Setup keep alive interval (setiap 5 menit)
-    setInterval(keepAlive, 5 * 60 * 1000);
+    // Setup keep alive interval (setiap 3 menit)
+    setInterval(keepAlive, 3 * 60 * 1000);
     
     // Jalankan keep alive pertama setelah 1 menit
     setTimeout(keepAlive, 60 * 1000);
     
     console.log('✅ Bot berjalan!');
     console.log('💡 Ketik .help untuk melihat command');
+    console.log('🔧 Gunakan .listgroups untuk melihat daftar grup');
     
     // Keep process alive
-    setInterval(() => {}, 1000 * 60 * 60);
+    setInterval(() => {
+        console.log('💓 Heartbeat - ' + new Date().toLocaleTimeString());
+    }, 60 * 1000);
 }
 
 // Handle process exit
 process.on('SIGINT', async () => {
     console.log('\n⚠️ Shutting down...');
     
-    if (ownerClient && ownerClient.connected) {
+    config.autoBcRunning = false;
+    saveConfig();
+    
+    if (broadcastInterval) {
+        clearInterval(broadcastInterval);
+    }
+    
+    if (ownerClient && isConnected) {
         await ownerClient.disconnect();
     }
     
-    saveConfig();
     console.log('✅ Bot dimatikan dengan aman');
     process.exit(0);
 });
