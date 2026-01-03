@@ -11,7 +11,6 @@ try {
 } catch (e) {
     console.log('📦 Modul tidak ditemukan, menginstal sekarang...');
     try {
-        // Menggunakan --no-engines untuk memaksa install di Node lama
         execSync('npm install telegram input --no-engines', { stdio: 'inherit' });
         console.log('✅ Instalasi selesai!');
     } catch (err) {
@@ -31,17 +30,16 @@ const { Api } = require('telegram/tl/api');
 const CONFIG_FILE = 'bot_config.json';
 const SESSION_FILE = 'owner_session.txt';
 
-// GANTI API ID & HASH ANDA DISINI JIKA PERLU
+// GANTI API ID & HASH ANDA DISINI
 const OWNER_API_ID = 29798494; 
 const OWNER_API_HASH = '53273c1de3e68a9ecdb90de2dcf46f6c';
 
-// Load konfigurasi dari file
 let config = {
     autoBcDelay: 5,
-    autoBcMessages: [],     // Untuk mode teks biasa
-    blacklist: [],          // Daftar ID grup yang di-skip
-    forwardMode: false,     // Status mode forward
-    forwardSource: null,    // Menyimpan ID pesan untuk di-forward {id, peerId}
+    autoBcMessages: [],
+    blacklist: [],
+    forwardMode: false,
+    forwardSource: null,
     autoBcRunning: false,
     debugMode: false
 };
@@ -50,42 +48,35 @@ if (fs.existsSync(CONFIG_FILE)) {
     try {
         const data = fs.readFileSync(CONFIG_FILE, 'utf8');
         const loadedConfig = JSON.parse(data);
-        // Merge config untuk memastikan field baru (blacklist/forward) ada
         config = { ...config, ...loadedConfig };
-        console.log('✅ Konfigurasi dimuat dari file');
+        console.log('✅ Konfigurasi dimuat');
     } catch (err) {
         console.error('❌ Error membaca config:', err.message);
     }
 }
 
-// Load session dari file
 let OWNER_SESSION_STRING = "";
 if (fs.existsSync(SESSION_FILE)) {
     try {
         OWNER_SESSION_STRING = fs.readFileSync(SESSION_FILE, 'utf8').trim();
-        console.log('✅ Session dimuat dari file');
     } catch (err) {
         console.error('❌ Error membaca session:', err.message);
     }
 }
 
-// Fungsi save konfigurasi
 function saveConfig() {
     try {
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
-        // console.log('💾 Konfigurasi disimpan'); // Uncomment jika ingin log setiap save
     } catch (err) {
-        console.error('❌ Error menyimpan config:', err.message);
+        console.error('❌ Error saving config:', err.message);
     }
 }
 
-// Fungsi save session
 function saveSession(sessionString) {
     try {
         fs.writeFileSync(SESSION_FILE, sessionString);
-        console.log('🔑 Session disimpan ke file');
     } catch (err) {
-        console.error('❌ Error menyimpan session:', err.message);
+        console.error('❌ Error saving session:', err.message);
     }
 }
 
@@ -109,19 +100,19 @@ async function loginOwner() {
     try {
         if (OWNER_SESSION_STRING) {
             await ownerClient.connect();
-            console.log('✅ Terhubung menggunakan session yang tersimpan');
+            console.log('✅ Terhubung (Saved Session)');
         } else {
-            console.log('📱 Login diperlukan, silakan masukkan informasi:');
+            console.log('📱 Login diperlukan:');
             await ownerClient.start({
                 phoneNumber: async () => await input.text('📞 Nomor HP: '),
-                password: async () => await input.text('🔑 Password 2FA (jika ada): '),
+                password: async () => await input.text('🔑 Password 2FA: '),
                 phoneCode: async () => await input.text('📲 Kode OTP: '),
                 onError: (err) => console.log('❌ Login Error:', err.message),
             });
         }
 
         const me = await ownerClient.getMe();
-        console.log('✅ Berhasil Login sebagai: ' + me.firstName + ' (ID: ' + me.id + ')');
+        console.log(`✅ Login sukses: ${me.firstName} (${me.id})`);
         
         const sessionString = ownerClient.session.save();
         if (sessionString !== OWNER_SESSION_STRING) {
@@ -134,14 +125,13 @@ async function loginOwner() {
         
         if (config.autoBcRunning) {
             startAutoBroadcast();
-            console.log('🔄 Broadcast diaktifkan ulang');
+            console.log('🔄 Broadcast Resume');
         }
         
         return true;
     } catch (err) {
         console.error('❌ GAGAL LOGIN:', err.message);
-        if (OWNER_SESSION_STRING && (err.message.includes('SESSION_REVOKED') || err.message.includes('AUTH_KEY'))) {
-            console.log('⚠️ Session tidak valid, menghapus dan mencoba login ulang...');
+        if (OWNER_SESSION_STRING && (err.message.includes('SESSION') || err.message.includes('AUTH'))) {
             if (fs.existsSync(SESSION_FILE)) fs.unlinkSync(SESSION_FILE);
             OWNER_SESSION_STRING = "";
             return await loginOwner();
@@ -163,333 +153,212 @@ function setupOwnerHandler(client) {
         const chatIdStr = msg.chatId.toString();
 
         if (text === '.help' || text === '/help') {
-            const helpText = `
-👑 **COMMAND LIST BARU**
+            await msg.reply({ message: `
+🛠 **BOT COMMANDS**
 
-**Broadcast Control:**
-.autobc on - Aktifkan broadcast
-.autobc off - Matikan broadcast
-.autobc status - Cek status/mode
-.autobc delay <menit> - Atur jeda waktu
+**.autobc on/off** - Nyalakan/Matikan BC
+**.autobc status** - Cek status & mode
+**.autobc delay 5** - Set delay 5 menit
 
-**Mode Forward & Pesan:**
-.setmsg (reply) - **PENTING!** Set pesan untuk di-forward
-.forward on - Aktifkan mode forward (pakai pesan .setmsg)
-.forward off - Matikan mode forward (pakai pesan teks biasa)
+**.setmsg** (reply) - Set pesan yg mau di-forward (WAJIB REPLY)
+**.forward on/off** - Mode forward pesan / teks biasa
 
-**Pesan Teks Biasa (Jika Forward OFF):**
-.addtext (reply) - Tambah pesan teks biasa
-.listtext - Lihat daftar pesan teks
-.removetext <nomor> - Hapus pesan teks
+**.addtext** (reply) - Tambah teks biasa
+**.listtext** - List teks biasa
+**.removetext 1** - Hapus teks no 1
 
-**Blacklist Group:**
-.addbl - Skip grup ini saat broadcast
-.unbl - Izinkan grup ini lagi
-.listbl - Lihat daftar ID blacklist
-
-**System:**
-.me - Info akun
-.ping - Cek koneksi
-.debug on/off
-            `;
-            await msg.reply({ message: helpText });
+**.addbl** - Blacklist grup ini (skip)
+**.unbl** - Hapus blacklist
+**.listbl** - Cek blacklist
+            `});
             return;
         }
 
-        // --- BLACKLIST COMMANDS ---
+        // --- BLACKLIST ---
         if (text === '.addbl') {
             if (!config.blacklist.includes(chatIdStr)) {
                 config.blacklist.push(chatIdStr);
                 saveConfig();
-                await msg.reply({ message: '⛔ Grup ini berhasil dimasukkan ke **Blacklist**.\nBot tidak akan promosi di sini.' });
+                await msg.reply({ message: '⛔ Grup di-Blacklist (Skip BC).' });
             } else {
-                await msg.reply({ message: '⚠️ Grup ini sudah ada di Blacklist.' });
+                await msg.reply({ message: '⚠️ Sudah di blacklist.' });
             }
             return;
         }
 
         if (text === '.unbl') {
-            if (config.blacklist.includes(chatIdStr)) {
-                config.blacklist = config.blacklist.filter(id => id !== chatIdStr);
-                saveConfig();
-                await msg.reply({ message: '✅ Grup ini dihapus dari Blacklist.\nBot akan promosi di sini lagi.' });
-            } else {
-                await msg.reply({ message: '⚠️ Grup ini tidak ada di Blacklist.' });
-            }
+            config.blacklist = config.blacklist.filter(id => id !== chatIdStr);
+            saveConfig();
+            await msg.reply({ message: '✅ Grup dihapus dari Blacklist.' });
             return;
         }
 
         if (text === '.listbl') {
-            await msg.reply({ message: `📋 **Blacklist Groups**\nTotal: ${config.blacklist.length} grup.` });
+            await msg.reply({ message: `📋 Blacklist: ${config.blacklist.length} grup` });
             return;
         }
 
-        // --- FORWARD MODE COMMANDS ---
+        // --- FORWARD & MSG ---
         if (text === '.forward on') {
-            if (!config.forwardSource) {
-                await msg.reply({ message: '⚠️ **Gagal!** Anda belum mengatur pesan sumber.\nSilakan reply pesan promosi Anda dengan **.setmsg** terlebih dahulu.' });
-                return;
-            }
+            if (!config.forwardSource) return msg.reply({ message: '⚠️ Set pesan dulu pake **.setmsg** (reply pesan)' });
             config.forwardMode = true;
             saveConfig();
-            await msg.reply({ message: '↪️ **Mode Forward: ON**\nBroadcast akan meneruskan pesan (forward) dari pesan yang disimpan.' });
+            await msg.reply({ message: '↪️ Mode Forward: ON' });
             return;
         }
 
         if (text === '.forward off') {
             config.forwardMode = false;
             saveConfig();
-            await msg.reply({ message: '📝 **Mode Forward: OFF**\nBroadcast akan mengirim pesan sebagai teks biasa (dari .addtext).' });
+            await msg.reply({ message: '📝 Mode Forward: OFF (Pakai Text)' });
             return;
         }
 
-        // Set pesan sumber untuk forward (PENGGANTI ADDKUTIP)
+        // PERBAIKAN UTAMA DI SINI (Menggunakan chatId, bukan peerId)
         if (text === '.setmsg' && msg.replyTo) {
             const reply = await client.getMessages(msg.peerId, { ids: msg.replyTo.replyToMsgId });
             if (reply && reply[0]) {
-                // Simpan ID pesan dan Peer ID (chat asalnya)
                 config.forwardSource = {
                     id: reply[0].id,
-                    peerId: reply[0].peerId.toString(), // Simpan ID chat asal
+                    // FIX: Gunakan chatId.toString() agar tidak jadi [object Object]
+                    peerId: reply[0].chatId.toString(), 
                     preview: reply[0].message ? reply[0].message.substring(0, 30) : "Media/Sticker"
                 };
                 saveConfig();
-                await msg.reply({ message: '✅ **Pesan Sumber Disimpan!**\nGunakan `.forward on` untuk mulai mem-forward pesan ini ke grup lain.' });
+                await msg.reply({ message: '✅ Pesan Sumber Disimpan!\nID: ' + config.forwardSource.peerId });
             }
             return;
         }
 
-        // --- STANDARD TEXT COMMANDS ---
         if (args[0] === '.addtext' && msg.replyTo) {
             const reply = await client.getMessages(msg.peerId, { ids: msg.replyTo.replyToMsgId });
             if (reply && reply[0] && reply[0].message) {
                 config.autoBcMessages.push(reply[0].message);
                 saveConfig();
-                await msg.reply({ message: `✅ Teks ditambahkan (Mode Forward OFF).\nTotal: ${config.autoBcMessages.length} pesan` });
+                await msg.reply({ message: `✅ Teks disimpan. Total: ${config.autoBcMessages.length}` });
             }
             return;
         }
 
-        if (args[0] === '.listtext') {
-            if (config.autoBcMessages.length === 0) {
-                await msg.reply({ message: '📭 Tidak ada pesan teks.' });
-                return;
-            }
-            let listText = '📋 **DAFTAR PESAN TEKS**\n\n';
-            config.autoBcMessages.forEach((msgText, index) => {
-                listText += `${index + 1}. ${msgText.substring(0, 50)}...\n`;
-            });
-            await msg.reply({ message: listText });
+        if (text === '.listtext') {
+            let t = config.autoBcMessages.map((m, i) => `${i+1}. ${m.substring(0,30)}...`).join('\n');
+            await msg.reply({ message: t || 'Kosong' });
             return;
         }
 
-        if (args[0] === '.removetext' && args[1]) {
-            const index = parseInt(args[1]) - 1;
-            if (index >= 0 && index < config.autoBcMessages.length) {
-                config.autoBcMessages.splice(index, 1);
-                saveConfig();
-                await msg.reply({ message: '🗑️ Pesan teks dihapus.' });
-            }
-            return;
-        }
-
-        // --- UTILS ---
-        if (text === '.ping') {
-            const start = Date.now();
-            const sent = await msg.reply({ message: '🏓 Pong!' });
-            const latency = Date.now() - start;
-            await client.editMessage(msg.chatId, { 
-                message: sent.id, 
-                text: `🏓 Pong!\n⏱️ Latency: ${latency}ms`
-            });
-            return;
-        }
-
-        if (text.startsWith('.autobc')) {
-            await handleAutoBcCommand(msg, client, args);
-        }
+        if (text.startsWith('.autobc')) await handleAutoBcCommand(msg, client, args);
 
     }, new NewMessage({}));
 }
 
 // ==========================================
-// 🚀 5. LOGIKA BROADCAST (Grup + Blacklist + Typing + Forward)
+// 🚀 5. BROADCAST LOGIC (FIXED)
 // ==========================================
 async function performBroadcastCycle() {
     if (!config.autoBcRunning || !ownerClient || !isConnected) return;
     
-    console.log('📢 Menjalankan Broadcast Cycle...');
+    console.log('📢 Broadcast Cycle Start...');
     
     try {
         const dialogs = await ownerClient.getDialogs({ limit: 200 });
-        
-        // Filter: Hanya Grup & Bukan Blacklist
-        const groups = dialogs.filter(dialog => {
-            const isGroup = dialog.isGroup || (dialog.entity && dialog.entity.className === 'Channel' && dialog.entity.megagroup);
-            const isChannel = dialog.isChannel && !dialog.entity.megagroup;
-            
-            // Cek Blacklist
-            const isBlacklisted = config.blacklist.includes(dialog.id.toString());
-            
-            return (isGroup && !isChannel && !isBlacklisted);
+        const groups = dialogs.filter(d => {
+            const isGroup = d.isGroup || (d.entity && d.entity.className === 'Channel' && d.entity.megagroup);
+            const isChannel = d.isChannel && !d.entity.megagroup;
+            const isBl = config.blacklist.includes(d.id.toString());
+            return isGroup && !isChannel && !isBl;
         });
-        
-        console.log(`📌 Target: ${groups.length} grup (Blacklist di-skip)`);
-        
+
+        console.log(`🎯 Target: ${groups.length} grup`);
         if (groups.length === 0) return;
-        
-        for (let i = 0; i < groups.length; i++) {
+
+        for (const group of groups) {
             if (!config.autoBcRunning) break;
-            
-            const group = groups[i];
-            
+
             try {
-                // 1. Kirim Action "Typing..." (Mengetik) selama 3 detik
-                // Menggunakan try-catch khusus agar jika typing gagal, pesan tetap terkirim
+                // Efek Mengetik (Safe Mode)
                 try {
-                    await ownerClient.invoke(new Api.messages.SetTyping({
-                        peer: group.inputEntity || group.id,
-                        action: new Api.SendMessageTypingAction()
-                    }));
-                    await sleep(3000); // Tunggu 3 detik seolah-olah mengetik
-                } catch (typeErr) {
-                    // Ignore error typing (kadang inputEntity belum cache)
-                }
+                    if (group.inputEntity) {
+                        await ownerClient.invoke(new Api.messages.SetTyping({
+                            peer: group.inputEntity,
+                            action: new Api.SendMessageTypingAction()
+                        }));
+                        await sleep(3000); 
+                    }
+                } catch (e) { /* Ignore typing error */ }
 
-                console.log(`📤 [${i + 1}/${groups.length}] Sending to: ${group.title}`);
+                console.log(`📤 Sending to: ${group.title || group.name}`);
 
-                // 2. Kirim Pesan Berdasarkan Mode
                 if (config.forwardMode && config.forwardSource) {
-                    // --- MODE FORWARD (Pesan Terusan) ---
-                    // Kita harus mengambil entity sumber dulu agar bisa di-forward
-                    // Menggunakan ID chat asal dan ID pesan yang disimpan di .setmsg
+                    // FIX: Pastikan Peer ID valid (BigInt)
+                    const sourcePeer = BigInt(config.forwardSource.peerId); 
                     await ownerClient.forwardMessages(group.id, {
                         messages: [config.forwardSource.id],
-                        fromPeer: config.forwardSource.peerId // ID Chat asal pesan
+                        fromPeer: sourcePeer 
                     });
-                    console.log('   ↪️ Forwarded message');
-
+                } else if (!config.forwardMode && config.autoBcMessages.length > 0) {
+                    const rndMsg = config.autoBcMessages[Math.floor(Math.random() * config.autoBcMessages.length)];
+                    await ownerClient.sendMessage(group.id, { message: rndMsg });
                 } else {
-                    // --- MODE TEKS BIASA ---
-                    if (config.autoBcMessages.length > 0) {
-                        const randomMsg = config.autoBcMessages[Math.floor(Math.random() * config.autoBcMessages.length)];
-                        await ownerClient.sendMessage(group.id, { 
-                            message: randomMsg,
-                            parseMode: 'html'
-                        });
-                        console.log('   📝 Sent text message');
-                    } else {
-                        console.log('   ⚠️ Tidak ada pesan teks/forward source belum diset.');
-                    }
+                    console.log('⚠️ Belum ada pesan/forward source.');
                 }
-                
-                // Delay antar grup (mencegah flood)
-                await sleep(5000); 
-                
+
+                await sleep(5000); // Delay antar grup
+
             } catch (err) {
-                console.log(`   ❌ Skip ${group.title}: ${err.message}`);
-                // Jika kena flood wait, istirahat agak lama
-                if (err.message.includes('FLOOD_WAIT')) {
-                    const waitTime = parseInt(err.message.match(/\d+/)[0]);
-                    console.log(`   ⏳ Kena FloodWait, tidur ${waitTime} detik...`);
-                    await sleep(waitTime * 1000);
+                console.log(`❌ Error ${group.title}: ${err.message}`);
+                if (err.message.includes('FLOOD')) {
+                    const s = parseInt(err.message.match(/\d+/)[0]) || 60;
+                    console.log(`⏳ FloodWait ${s}s...`);
+                    await sleep(s * 1000);
                 }
             }
         }
-        console.log('✅ Broadcast cycle selesai');
-        
+        console.log('✅ Cycle Done.');
     } catch (err) {
-        console.error('❌ Error cycle:', err.message);
+        console.error('❌ Cycle Error:', err.message);
     }
 }
 
-async function handleAutoBcCommand(message, client, args) {
-    const subCmd = args[1] ? args[1].toLowerCase() : null;
-
-    switch(subCmd) {
-        case 'on':
-            config.autoBcRunning = true;
-            saveConfig();
-            startAutoBroadcast();
-            await message.reply({ message: '🟢 Broadcast **AKTIF**' });
-            break;
-        case 'off':
-            config.autoBcRunning = false;
-            saveConfig();
-            if (broadcastInterval) clearInterval(broadcastInterval);
-            await message.reply({ message: '🔴 Broadcast **MATI**' });
-            break;
-        case 'status':
-            const statusMsg = `
-📊 **STATUS BOT**
-• Status: ${config.autoBcRunning ? '🟢 RUNNING' : '🔴 STOPPED'}
-• Delay: ${config.autoBcDelay} menit
-• Mode Forward: ${config.forwardMode ? '✅ ON' : '❌ OFF'}
-• Pesan Teks: ${config.autoBcMessages.length}
-• Blacklist: ${config.blacklist.length} grup
-• Source Forward: ${config.forwardSource ? '✅ Ada' : '❌ Kosong'}
-            `;
-            await message.reply({ message: statusMsg });
-            break;
-        case 'delay':
-            if (args[2]) {
-                config.autoBcDelay = parseInt(args[2]);
-                saveConfig();
-                if (config.autoBcRunning) startAutoBroadcast();
-                await message.reply({ message: `⏱️ Delay diubah ke ${args[2]} menit` });
-            }
-            break;
-        case 'remove':
-            config.autoBcMessages = [];
-            config.forwardSource = null;
-            saveConfig();
-            await message.reply({ message: '🗑️ Semua data pesan & forward source dihapus.' });
-            break;
-        default:
-            await message.reply({ message: '❌ Perintah salah. Cek .help' });
+async function handleAutoBcCommand(msg, client, args) {
+    const sub = args[1] ? args[1].toLowerCase() : '';
+    if (sub === 'on') {
+        config.autoBcRunning = true; saveConfig(); startAutoBroadcast();
+        await msg.reply({ message: '🟢 BC ON' });
+    } else if (sub === 'off') {
+        config.autoBcRunning = false; saveConfig(); 
+        if (broadcastInterval) clearInterval(broadcastInterval);
+        await msg.reply({ message: '🔴 BC OFF' });
+    } else if (sub === 'status') {
+        await msg.reply({ message: `Status: ${config.autoBcRunning ? 'ON' : 'OFF'}\nMode Forward: ${config.forwardMode}\nDelay: ${config.autoBcDelay}m` });
+    } else if (sub === 'delay' && args[2]) {
+        config.autoBcDelay = parseInt(args[2]); saveConfig();
+        await msg.reply({ message: `⏱ Delay: ${args[2]} menit` });
     }
 }
 
-// Helper
-function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function startAutoBroadcast() {
     if (broadcastInterval) clearInterval(broadcastInterval);
-    broadcastInterval = setInterval(performBroadcastCycle, config.autoBcDelay * 60 * 1000);
-    // Jalankan segera setelah 5 detik
+    broadcastInterval = setInterval(performBroadcastCycle, config.autoBcDelay * 60000);
     setTimeout(performBroadcastCycle, 5000);
-    console.log(`⏰ Jadwal set: tiap ${config.autoBcDelay} menit`);
 }
 
-// Keep Alive & Reconnect Logic
+// Keep Alive
 async function keepAlive() {
     if (!ownerClient || !isConnected) {
-        try {
-            if (ownerClient) await ownerClient.disconnect();
-            await loginOwner();
-        } catch (e) { console.log('Reconnecting...'); }
+        try { if(ownerClient) await ownerClient.disconnect(); await loginOwner(); } catch(e){}
     } else {
-        try { await ownerClient.getMe(); } 
-        catch (e) { isConnected = false; }
+        try { await ownerClient.getMe(); } catch(e) { isConnected = false; }
     }
 }
 
 // Main
 async function main() {
-    console.log('🤖 Bot Starting...');
-    const success = await loginOwner();
-    if (!success) {
-        setTimeout(main, 10000);
-        return;
-    }
-    setInterval(keepAlive, 3 * 60 * 1000);
+    console.log('🤖 Starting...');
+    if(await loginOwner()) setInterval(keepAlive, 180000);
+    else setTimeout(main, 10000);
 }
 
-process.on('SIGINT', async () => {
-    config.autoBcRunning = false;
-    saveConfig();
-    if (ownerClient) await ownerClient.disconnect();
-    process.exit(0);
-});
-
+process.on('SIGINT', () => process.exit(0));
 main().catch(console.error);
